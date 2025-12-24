@@ -20,6 +20,12 @@ let isProcessing = false;
 
 connectDB();
 
+app.get("/", async (req, res) => {
+  return res.status(200).json({
+    success: "Server is running"
+  });
+});
+
 /* ---------------------------------
    WEBHOOK ENDPOINT
 ---------------------------------- */
