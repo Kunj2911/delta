@@ -1,7 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const { placeOrder } = require("./deltaClient");
-const connectDB = require("./db");
+// const connectDB = require("./db");
 
 const app = express();
 app.use(express.json());
@@ -18,7 +18,7 @@ let currentPosition = {
 
 let isProcessing = false;
 
-connectDB();
+// connectDB();
 
 app.get("/", async (req, res) => {
   return res.status(200).json({
