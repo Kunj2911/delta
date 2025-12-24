@@ -1,46 +1,107 @@
 require("dotenv").config();
 const express = require("express");
-const {
-  placeOrder,
-  getIndexPriceBySymbol
-} = require("./deltaClient");
+const { placeOrder } = require("./deltaClient");
+const connectDB = require("./db");
 
 const app = express();
 app.use(express.json());
 
-app.post("/webhook", async (req, res) => {
-  try {
-    const { symbol, side, size,entryPrice } = req.body;
+/* ---------------------------------
+   IN-MEMORY POSITION STATE
+   (move to DB later)
+---------------------------------- */
+let currentPosition = {
+  side: null,       // "buy" | "sell" | null
+  size: null,
+  entryPrice: null
+};
 
-    if (!symbol || !side) {
+let isProcessing = false;
+
+connectDB();
+
+/* ---------------------------------
+   WEBHOOK ENDPOINT
+---------------------------------- */
+app.post("/webhook", async (req, res) => {
+  if (isProcessing) {
+    return res.status(429).json({
+      error: "Order already processing"
+    });
+  }
+
+  try {
+    isProcessing = true;
+
+    const { symbol, side, size, entryPrice } = req.body;
+
+    if (!symbol || !side || !entryPrice) {
       return res.status(400).json({
-        error: "symbol and side are required"
+        error: "symbol, side, entryPrice are required"
       });
     }
 
-    const orderSide = side.toLowerCase();
-    const orderSize = Number(size || 1);
-
-
-    // % CONFIG
-    const SL_PERCENT = 0.01;   // 1%
-    const TP_PERCENT = 0.02;   // 2%
-
-    let sl, tp;
-
-    if (orderSide === "buy") {
-      sl = entryPrice * (1 - SL_PERCENT);
-      tp = entryPrice * (1 + TP_PERCENT);
-    } else if (orderSide === "sell") {
-      sl = entryPrice * (1 + SL_PERCENT);
-      tp = entryPrice * (1 - TP_PERCENT);
-    } else {
+    const signalSide = side.toLowerCase();
+    if (!["buy", "sell"].includes(signalSide)) {
       return res.status(400).json({ error: "Invalid side" });
     }
 
-    const orderPayload = {
+    const orderSize = Number(size || 1);
+
+    /* -------- SL / TP CONFIG -------- */
+    const SL_PERCENT = 0.01; // 1%
+    const TP_PERCENT = 0.02; // 2%
+
+    /* ---------------------------------
+       SAME SIDE → IGNORE
+    ---------------------------------- */
+    if (currentPosition.side === signalSide) {
+      return res.json({
+        status: "IGNORED",
+        reason: "Same direction already open"
+      });
+    }
+
+    /* ---------------------------------
+       CLOSE EXISTING POSITION
+    ---------------------------------- */
+    if (currentPosition.side) {
+      const closeSide =
+        currentPosition.side === "buy" ? "sell" : "buy";
+
+      console.log("🔁 CLOSING POSITION:", currentPosition.side);
+
+      await placeOrder({
+        product_symbol: symbol,
+        side: closeSide,
+        order_type: "market_order",
+        size: currentPosition.size,
+        reduce_only: true
+      });
+
+      currentPosition = {
+        side: null,
+        size: null,
+        entryPrice: null
+      };
+    }
+
+    /* ---------------------------------
+       OPEN NEW POSITION
+    ---------------------------------- */
+    let sl, tp;
+
+    if (signalSide === "buy") {
+      sl = entryPrice * (1 - SL_PERCENT);
+      tp = entryPrice * (1 + TP_PERCENT);
+    } else {
+      sl = entryPrice * (1 + SL_PERCENT);
+      tp = entryPrice * (1 - TP_PERCENT);
+    }
+ 
+    const openPayload = {
       product_symbol: symbol,
-      side: orderSide,
+      side: signalSide,
       order_type: "market_order",
       size: orderSize,
       bracket_stop_loss_price: sl.toFixed(2),
@@ -48,29 +109,38 @@ app.post("/webhook", async (req, res) => {
       bracket_stop_trigger_method: "mark_price"
     };
 
-    console.log("📩 ORDER PAYLOAD:", orderPayload);
+    console.log("📩 OPEN ORDER:", openPayload);
 
-    // 🔒 Uncomment when ready for LIVE orders
-    
-    // const result = await placeOrder(orderPayload);
+    const btcPrice = await placeOrder(openPayload);
+    console.log(btcPrice);
+
+    currentPosition = {
+      side: signalSide,
+      size: orderSize,
+      entryPrice
+    };
 
     return res.json({
-      success: true,
-      entryPrice,
+      status: currentPosition.side ? "FLIPPED" : "OPENED",
+      side: signalSide,
       stopLoss: sl.toFixed(2),
-      takeProfit: tp.toFixed(2),
-      orderPayload
+      takeProfit: tp.toFixed(2)
     });
 
   } catch (err) {
     console.error("❌ ERROR:", err.message);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: err.message
     });
+  } finally {
+    isProcessing = false;
   }
 });
 
+/* ---------------------------------
+   SERVER START
+---------------------------------- */
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () =>
   console.log(`🚀 Server running on port ${PORT}`)
