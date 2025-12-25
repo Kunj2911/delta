@@ -1,137 +1,100 @@
 require("dotenv").config();
 const express = require("express");
-const { placeOrder } = require("./deltaClient");
-const connectDB = require("./db");
+const { placeOrder, authTest } = require("./deltaClient");
 
 const app = express();
 app.use(express.json());
 
 /* ---------------------------------
-   IN-MEMORY POSITION STATE
-   (move to DB later)
+   BOT STATE
 ---------------------------------- */
-let currentPosition = {
-  side: null,       // "buy" | "sell" | null
-  size: null,
-  entryPrice: null
-};
-
 let isProcessing = false;
 
-connectDB();
+/* ---------------------------------
+   CONFIG
+---------------------------------- */
+const SYMBOL = "BTCUSD";
 
 /* ---------------------------------
-   WEBHOOK ENDPOINT
+   HEALTH CHECK
+---------------------------------- */
+app.get("/", (req, res) => {
+  res.json({ success: true, message: "Delta flip bot running" });
+});
+
+/* ---------------------------------
+   WEBHOOK (TradingView)
 ---------------------------------- */
 app.post("/webhook", async (req, res) => {
   if (isProcessing) {
-    return res.status(429).json({
-      error: "Order already processing"
-    });
+    return res.status(429).json({ error: "Already processing" });
   }
 
   try {
     isProcessing = true;
 
-    const { symbol, side, size, entryPrice } = req.body;
+    const { side, size } = req.body;
+    const signalSide = side?.toLowerCase();
+    const orderSize = Number(size || 1);
 
-    if (!symbol || !side || !entryPrice) {
-      return res.status(400).json({
-        error: "symbol, side, entryPrice are required"
-      });
-    }
-
-    const signalSide = side.toLowerCase();
     if (!["buy", "sell"].includes(signalSide)) {
       return res.status(400).json({ error: "Invalid side" });
     }
 
-    const orderSize = Number(size || 1);
-
-    /* -------- SL / TP CONFIG -------- */
-    const SL_PERCENT = 0.01; // 1%
-    const TP_PERCENT = 0.02; // 2%
-
     /* ---------------------------------
-       SAME SIDE → IGNORE
+       CHECK LIVE POSITION
     ---------------------------------- */
-    if (currentPosition.side === signalSide) {
-      return res.json({
-        status: "IGNORED",
-        reason: "Same direction already open"
-      });
-    }
+    const posRes = await authTest();
 
-    /* ---------------------------------
-       CLOSE EXISTING POSITION
-    ---------------------------------- */
-    if (currentPosition.side) {
-      const closeSide =
-        currentPosition.side === "buy" ? "sell" : "buy";
+    if (posRes.result.length > 0) {
+      const pos = posRes.result[0];
+      const liveSide = pos.size > 0 ? "buy" : "sell";
+      const liveSize = Math.abs(pos.size);
 
-      console.log("🔁 CLOSING POSITION:", currentPosition.side);
+      // SAME SIDE → IGNORE
+      if (liveSide === signalSide) {
+        return res.json({
+          status: "IGNORED",
+          reason: "Same direction already open"
+        });
+      }
+
+      // OPPOSITE SIDE → CLOSE POSITION
+      console.log("🔁 Closing position:", liveSide);
 
       await placeOrder({
-        product_symbol: symbol,
-        side: closeSide,
+        product_symbol: SYMBOL,
+        side: liveSide === "buy" ? "sell" : "buy",
         order_type: "market_order",
-        size: currentPosition.size,
+        size: liveSize,
         reduce_only: true
       });
-
-      currentPosition = {
-        side: null,
-        size: null,
-        entryPrice: null
-      };
     }
 
     /* ---------------------------------
        OPEN NEW POSITION
     ---------------------------------- */
-    let sl, tp;
+    console.log("📩 Opening:", signalSide);
 
-    if (signalSide === "buy") {
-      sl = entryPrice * (1 - SL_PERCENT);
-      tp = entryPrice * (1 + TP_PERCENT);
-    } else {
-      sl = entryPrice * (1 + SL_PERCENT);
-      tp = entryPrice * (1 - TP_PERCENT);
-    }
- 
-    const openPayload = {
-      product_symbol: symbol,
+    await placeOrder({
+      product_symbol: SYMBOL,
       side: signalSide,
       order_type: "market_order",
-      size: orderSize,
-      bracket_stop_loss_price: sl.toFixed(2),
-      bracket_take_profit_price: tp.toFixed(2),
-      bracket_stop_trigger_method: "mark_price"
-    };
-
-    console.log("📩 OPEN ORDER:", openPayload);
-
-    const btcPrice = await placeOrder(openPayload);
-    console.log(btcPrice);
-
-    currentPosition = {
-      side: signalSide,
-      size: orderSize,
-      entryPrice
-    };
+      size: orderSize
+    });
 
     return res.json({
-      status: currentPosition.side ? "FLIPPED" : "OPENED",
+      success: true,
+      status: "FLIPPED",
       side: signalSide,
-      stopLoss: sl.toFixed(2),
-      takeProfit: tp.toFixed(2)
+      size: orderSize
     });
 
   } catch (err) {
-    console.error("❌ ERROR:", err.message);
+    console.error("❌ ERROR:", err.response?.data || err.message);
     return res.status(500).json({
       success: false,
-      error: err.message
+      error: err.response?.data || err.message
     });
   } finally {
     isProcessing = false;
@@ -139,9 +102,8 @@ app.post("/webhook", async (req, res) => {
 });
 
 /* ---------------------------------
-   SERVER START
+   START SERVER
 ---------------------------------- */
-const PORT = process.env.PORT || 4000;
-app.listen(PORT, () =>
-  console.log(`🚀 Server running on port ${PORT}`)
-);
+app.listen(4000, () => {
+  console.log("🚀 Delta Flip Bot LIVE on port 4000");
+});

@@ -30,32 +30,41 @@ async function deltaRequest({
   queryString = "",
   payload = ""
 }) {
+  // 🔑 RULE: GET must have NO payload
+  const isGet = method === "GET";
+  const finalPayload = isGet ? "" : payload;
+
   const { signature, timestamp } = createSignature({
     method,
     path,
     queryString,
-    payload
+    payload: finalPayload
   });
 
   const url = BASE_URL + path + queryString;
 
-  const response = await axios({
+  const axiosConfig = {
     method,
     url,
     headers: {
       "api-key": process.env.DELTA_API_KEY,
       "timestamp": timestamp,
       "signature": signature,
-      "Content-Type": "application/json",
       "Accept": "application/json"
-    },
-    data: payload || undefined,
-    transformRequest: [(d) => d], // 🚫 prevent axios mutation
-    maxBodyLength: Infinity
-  });
+    }
+  };
 
+  // ❌ DO NOT attach body or Content-Type for GET
+  if (!isGet) {
+    axiosConfig.headers["Content-Type"] = "application/json";
+    axiosConfig.data = finalPayload;
+    axiosConfig.transformRequest = [(d) => d];
+  }
+
+  const response = await axios(axiosConfig);
   return response.data;
 }
+
 
 /* ------------------------------------------------
    PLACE ORDER
@@ -83,19 +92,13 @@ async function getProducts() {
 /* ------------------------------------------------
    AUTH TEST (POSITIONS)
 ------------------------------------------------ */
-async function authTest(productId = 1) {
+async function authTest() {
   return deltaRequest({
     method: "GET",
     path: "/v2/positions",
-    queryString: `?product_id=${productId}`
+    queryString: "?underlying_asset_symbol=BTC"
   });
 }
-
-
-/*----------------------------------------------
---------------------------------------------- */
-
-
 
 /* ------------------------------------------------
    EXPORTS
