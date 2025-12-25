@@ -65,7 +65,6 @@ async function deltaRequest({
   return response.data;
 }
 
-
 /* ------------------------------------------------
    PLACE ORDER
 ------------------------------------------------ */
@@ -90,6 +89,60 @@ async function getProducts() {
 }
 
 /* ------------------------------------------------
+   GET PRODUCT TICKER (for mark price)
+------------------------------------------------ */
+async function getProductTicker(symbol) {
+  return deltaRequest({
+    method: "GET",
+    path: `/v2/tickers/${symbol}`
+  });
+}
+
+/* ------------------------------------------------
+   GET OPEN ORDERS
+------------------------------------------------ */
+async function getOpenOrders(productId) {
+  const queryString = `?product_id=${productId}&state=open`;
+  
+  return deltaRequest({
+    method: "GET",
+    path: "/v2/orders",
+    queryString
+  });
+}
+
+/* ------------------------------------------------
+   CANCEL ORDER
+------------------------------------------------ */
+async function cancelOrder(orderId, productId) {
+  const payload = JSON.stringify({
+    id: orderId,
+    product_id: productId
+  });
+
+  return deltaRequest({
+    method: "DELETE",
+    path: "/v2/orders",
+    payload
+  });
+}
+
+/* ------------------------------------------------
+   CANCEL ALL ORDERS FOR PRODUCT
+------------------------------------------------ */
+async function cancelAllOrders(productId) {
+  const payload = JSON.stringify({
+    product_id: productId
+  });
+
+  return deltaRequest({
+    method: "DELETE",
+    path: "/v2/orders/all",
+    payload
+  });
+}
+
+/* ------------------------------------------------
    AUTH TEST (POSITIONS)
 ------------------------------------------------ */
 async function authTest() {
@@ -106,5 +159,9 @@ async function authTest() {
 module.exports = {
   placeOrder,
   getProducts,
+  getProductTicker,
+  getOpenOrders,
+  cancelOrder,
+  cancelAllOrders,
   authTest,
 };
